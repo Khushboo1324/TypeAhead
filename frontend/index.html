@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TypeAhead Search</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Arial, sans-serif;
+      background: #f5f5f5;
+      padding: 40px 20px;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 30px;
+      color: #333;
+      font-size: 28px;
+    }
+
+    /* Search box */
+    .search-wrapper {
+      position: relative;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    .search-row { display: flex; gap: 8px; }
+    #searchInput {
+      flex: 1;
+      padding: 12px 16px;
+      font-size: 16px;
+      border: 2px solid #ddd;
+      border-radius: 8px;
+      outline: none;
+    }
+    #searchInput:focus { border-color: #4285f4; }
+    #searchBtn {
+      padding: 12px 24px;
+      background: #4285f4;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    #searchBtn:hover { background: #3367d6; }
+
+    /* Suggestions dropdown */
+    #suggestions {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 68px;
+      background: white;
+      border: 1px solid #ddd;
+      border-top: none;
+      border-radius: 0 0 8px 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      z-index: 100;
+      display: none;
+    }
+    .suggestion-item {
+      padding: 10px 16px;
+      cursor: pointer;
+      font-size: 15px;
+      color: #333;
+      display: flex;
+      justify-content: space-between;
+    }
+    .suggestion-item:hover,
+    .suggestion-item.active { background: #f0f4ff; }
+    .suggestion-score {
+      font-size: 11px;
+      color: #aaa;
+    }
+
+    /* Info bar */
+    #infoBar {
+      max-width: 600px;
+      margin: 8px auto;
+      font-size: 11px;
+      color: #aaa;
+      text-align: center;
+    }
+
+    /* Result */
+    #result {
+      max-width: 600px;
+      margin: 16px auto;
+      padding: 12px 16px;
+      background: white;
+      border-radius: 8px;
+      display: none;
+      color: #555;
+      border-left: 4px solid #4285f4;
+    }
+
+    /* Trending */
+    #trending {
+      max-width: 600px;
+      margin: 30px auto;
+    }
+    #trending h3 {
+      margin-bottom: 12px;
+      color: #555;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .trend-item {
+      display: inline-block;
+      margin: 4px;
+      padding: 6px 14px;
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: 20px;
+      font-size: 13px;
+      cursor: pointer;
+      color: #333;
+    }
+    .trend-item:hover {
+      background: #f0f4ff;
+      border-color: #4285f4;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>🔍 TypeAhead Search</h1>
+
+  <div class="search-wrapper">
+    <div class="search-row">
+      <input
+        type="text"
+        id="searchInput"
+        placeholder="Type at least 3 characters..."
+        autocomplete="off"
+      />
+      <button id="searchBtn">Search</button>
+    </div>
+   <div id="suggestions"></div>
+<div id="loadingIndicator" style="display:none; padding: 10px 16px; color: #888; font-size: 14px;">
+   Loading...
+</div>
+<div id="errorMsg" style="display:none; padding: 10px 16px; color: #d93025; font-size: 14px;">
+   Something went wrong. Please try again.
+</div>
+  </div>
+
+  <div id="infoBar"></div>
+  <div id="result"></div>
+
+<div id="trending">
+    <div style="display: flex; gap: 24px; max-width: 900px; margin: 30px auto;">
+      
+      <!-- Basic Trending -->
+      <div style="flex: 1; background: white; border-radius: 8px; padding: 16px;">
+        <h3 style="margin-bottom: 4px; color: #555; font-size: 13px; text-transform: uppercase;">
+           Basic Trending
+        </h3>
+        <p style="font-size: 11px; color: #aaa; margin-bottom: 12px;">
+          Sorted by all-time count only
+        </p>
+        <div id="trendingBasic">Loading...</div>
+      </div>
+
+      <!-- Enhanced Trending -->
+      <div style="flex: 1; background: white; border-radius: 8px; padding: 16px;">
+        <h3 style="margin-bottom: 4px; color: #555; font-size: 13px; text-transform: uppercase;">
+           Enhanced Trending
+        </h3>
+        <p style="font-size: 11px; color: #aaa; margin-bottom: 12px;">
+          Recency-aware: score = score × 0.9 + count
+        </p>
+        <div id="trendingEnhanced">Loading...</div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    const input = document.getElementById('searchInput');
+    const suggestionsBox = document.getElementById('suggestions');
+    const resultBox = document.getElementById('result');
+    const infoBar = document.getElementById('infoBar');
+
+    let activeIndex = -1;
+    let debounceTimer = null;
+
+    // Debounced typeahead - waits 250ms after user stops typing
+    input.addEventListener('input', () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => fetchSuggestions(input.value), 250);
+    });
+
+    async function fetchSuggestions(query) {
+    const q = query.trim();
+    const loading = document.getElementById('loadingIndicator');
+    const errorMsg = document.getElementById('errorMsg');
+
+    if (q.length < 3) {
+        suggestionsBox.style.display = 'none';
+        infoBar.textContent = '';
+        return;
+    }
+
+    // Show loading, hide error
+    loading.style.display = 'block';
+    errorMsg.style.display = 'none';
+    suggestionsBox.style.display = 'none';
+
+    try {
+        const res = await fetch(`/suggest?q=${encodeURIComponent(q)}`);
+
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
+
+        const data = await res.json();
+
+        infoBar.textContent =
+        `Latency: ${data.latency_ms}ms | Source: ${data.source || '-'} | Node: ${data.node || '-'}`;
+
+        const items = data.suggestions || [];
+
+        loading.style.display = 'none';
+
+        if (items.length === 0) {
+        suggestionsBox.style.display = 'none';
+        return;
+        }
+
+        suggestionsBox.innerHTML = items.map((s, i) =>
+        `<div class="suggestion-item" data-index="${i}" onclick="selectSuggestion('${s.query.replace(/'/g, "\\'")}')">
+            <span>${s.query}</span>
+            <span class="suggestion-score">score: ${s.score}</span>
+        </div>`
+        ).join('');
+
+        suggestionsBox.style.display = 'block';
+        activeIndex = -1;
+
+    } catch (err) {
+        console.error('Suggest error:', err);
+        loading.style.display = 'none';
+        errorMsg.style.display = 'block';
+        suggestionsBox.style.display = 'none';
+    }
+    }
+
+    // Keyboard navigation
+    input.addEventListener('keydown', (e) => {
+      const items = suggestionsBox.querySelectorAll('.suggestion-item');
+      if (e.key === 'ArrowDown') {
+        activeIndex = Math.min(activeIndex + 1, items.length - 1);
+      } else if (e.key === 'ArrowUp') {
+        activeIndex = Math.max(activeIndex - 1, -1);
+      } else if (e.key === 'Enter') {
+        if (activeIndex >= 0 && items[activeIndex]) {
+          selectSuggestion(items[activeIndex].querySelector('span').textContent);
+        } else {
+          submitSearch(input.value);
+        }
+        return;
+      }
+      items.forEach((el, i) =>
+        el.classList.toggle('active', i === activeIndex)
+      );
+    });
+
+    function selectSuggestion(query) {
+      input.value = query;
+      suggestionsBox.style.display = 'none';
+      submitSearch(query);
+    }
+
+    document.getElementById('searchBtn')
+      .addEventListener('click', () => submitSearch(input.value));
+
+async function submitSearch(query) {
+    if (!query.trim()) return;
+    suggestionsBox.style.display = 'none';
+
+    // Show loading state on button
+    const btn = document.getElementById('searchBtn');
+    btn.textContent = 'Searching...';
+    btn.disabled = true;
+
+    try {
+        const res = await fetch('/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: query.trim() })
+        });
+
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
+
+        const data = await res.json();
+
+        resultBox.style.display = 'block';
+        resultBox.style.borderColor = '#4285f4';
+        resultBox.textContent = `${data.message} "${query}"`;
+
+        loadTrending();
+
+    } catch (err) {
+        console.error('Search error:', err);
+        resultBox.style.display = 'block';
+        resultBox.style.borderColor = '#d93025';
+        resultBox.textContent = `Search failed. Please check your connection.`;
+    } finally {
+        // Always restore button
+        btn.textContent = 'Search';
+        btn.disabled = false;
+    }
+    }
+
+    // Close suggestions on outside click
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.search-wrapper')) {
+        suggestionsBox.style.display = 'none';
+      }
+    });
+
+async function loadTrending() {
+  try {
+    const [basicRes, enhancedRes] = await Promise.all([
+      fetch('/trending/basic'),
+      fetch('/trending/enhanced')
+    ]);
+
+    const basicData = await basicRes.json();
+    const enhancedData = await enhancedRes.json();
+
+    // Render basic list
+    document.getElementById('trendingBasic').innerHTML = 
+      (basicData.trending || []).map((t, i) =>
+        `<div style="padding: 6px 0; border-bottom: 1px solid #f5f5f5; 
+          font-size: 13px; cursor: pointer; color: #333;"
+          onclick="selectSuggestion('${t.query.replace(/'/g, "\\'")}')">
+          <span style="color:#aaa; margin-right:8px;">${i + 1}.</span>
+          ${t.query}
+          <span style="float:right; color:#aaa; font-size:11px;">
+            ${t.count.toLocaleString()} searches
+          </span>
+        </div>`
+      ).join('');
+
+    // Render enhanced list
+    document.getElementById('trendingEnhanced').innerHTML = 
+      (enhancedData.trending || []).map((t, i) =>
+        `<div style="padding: 6px 0; border-bottom: 1px solid #f5f5f5;
+          font-size: 13px; cursor: pointer; color: #333;"
+          onclick="selectSuggestion('${t.query.replace(/'/g, "\\'")}')">
+          <span style="color:#aaa; margin-right:8px;">${i + 1}.</span>
+          ${t.query}
+          <span style="float:right; color:#aaa; font-size:11px;">
+            score: ${Math.round(t.score).toLocaleString()}
+          </span>
+        </div>`
+      ).join('');
+
+  } catch (err) {
+    console.error('Trending error:', err);
+  }
+}
+    loadTrending();
+  </script>
+
+</body>
+</html>
